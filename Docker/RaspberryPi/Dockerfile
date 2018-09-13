@@ -24,4 +24,7 @@ MAINTAINER HLXEasy <hlxeasy@gmail.com>
 COPY --from=build /spectre/src/spectrecoind /usr/local/bin/
 COPY --from=build /spectre/src/spectre /usr/local/bin/spectrecoin
 
+# Copy new dialog content
+COPY --from=build /newDialog/ /
+
 USER spectre
