@@ -42,7 +42,7 @@ COPY --from=build /alias-wallet/scripts/createChecksums.sh /tmp/
 RUN cd /filesToUpload \
  && tar czf ${ARCHIVE} . \
  && github-release upload \
-        --user aliascash \
+        --user HLXEasy \
         --security-token "${GITHUB_CI_TOKEN}" \
         --repo "${ALIAS_REPOSITORY}" \
         --tag "${ALIAS_RELEASE}" \
