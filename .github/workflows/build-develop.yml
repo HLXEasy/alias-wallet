@@ -2,8 +2,7 @@ name: Develop
 on:
   push:
     branches:
-      - develop
-      - githubActionsRefactoring
+      - ghActionsLinuxReleasebuild
 jobs:
   # ==========================================================================
   # Create Github tag/release and export short SHA of current HEAD
