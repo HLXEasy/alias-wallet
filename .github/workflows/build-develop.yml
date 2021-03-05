@@ -9,51 +9,124 @@ jobs:
   prepareRelease:
     runs-on: ubuntu-latest
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      upload_url: ${{ steps.create_release.outputs.url }}
       github_sha_short: ${{ steps.slug.outputs.sha8 }}
+      alias_release: ${{ steps.determine_release.outputs.alias_release }}
     steps:
+      - uses: actions/checkout@v1
       - name: Get short SHA
         id: slug
         run: echo "::set-output name=sha8::$(echo ${GITHUB_SHA} | cut -c1-8)"
       - name: Get current date
         id: date
         run: echo "::set-output name=date::$(date +'%Y-%m-%d %H:%M:%S')"
-      - name: Create Release
+      - name: Extract branch name
+        id: extract_branch
+        shell: bash
+        run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
+      - name: Set Alias release/tag name
+        id: determine_release
+        run: |
+          if [[ ${{ steps.extract_branch.outputs.branch }} = master ]] ; then
+              majorVersion=$(grep CLIENT_VERSION_MAJOR ${{ github.workspace }}/CMakeLists.txt | head -n1 | cut -d ' ' -f2 | sed 's/)//g' | tr -d '\\n' | tr -d '\\r' | sed 's/ //g')
+              minorVersion=$(grep CLIENT_VERSION_MINOR ${{ github.workspace }}/CMakeLists.txt | head -n1 | cut -d ' ' -f2 | sed 's/)//g' | tr -d '\\n' | tr -d '\\r' | sed 's/ //g')
+              bugfixVersion=$(grep CLIENT_VERSION_REVISION ${{ github.workspace }}/CMakeLists.txt | head -n1 | cut -d ' ' -f2 | sed 's/)//g' | tr -d '\\n' | tr -d '\\r' | sed 's/ //g')
+              echo "::set-output name=alias_release::$(printf '%s.%s.%s' $majorVersion $minorVersion $bugfixVersion)"
+          else
+              echo "::set-output name=alias_release::Build${{ github.run_number }}"
+          fi
+
+      # First create the plain release, so the upload URL could be exported
+      - name: Create release
         id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: Build${{ github.run_number }}-${{ steps.slug.outputs.sha8 }}
-          release_name: "Continuous build #${{ github.run_number }}"
+          tag_name: ${{ steps.determine_release.outputs.alias_release }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # If we're on 'master', use ReleaseNotes.md
+      - name: Releasenotes from master
+        id: create_release_master
+        uses: softprops/action-gh-release@v1
+        if: steps.extract_branch.outputs.branch == 'master'
+        with:
+          tag_name: ${{ steps.determine_release.outputs.alias_release }}
+          name: "Release ${{ steps.determine_release.outputs.alias_release }} (Build #${{ github.run_number }})"
+          body_path: ${{ github.workspace }}/ReleaseNotes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # If we're on 'develop', use simple text directly
+      - name: Releasenotes from Develop
+        id: create_release_develop
+        uses: softprops/action-gh-release@v1
+        if: steps.extract_branch.outputs.branch != 'master'
+        with:
+          tag_name: ${{ steps.determine_release.outputs.alias_release }}
+          name: "Continuous build #${{ github.run_number }}"
           body: |
             Build #${{ github.run_number }} from ${{ steps.date.outputs.date }}
-            - tbd: Artifact checksums
+            - To verify checksums see dedicated checksum files for each download
           draft: false
           prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ==========================================================================
-  # Build all x86 Linux flavours
-  buildLinux:
-    runs-on: ubuntu-latest
+  # Build MacOS version
+  buildMacOS:
+    runs-on: macos-latest
     needs: prepareRelease
-    strategy:
-      matrix:
-        distro: [ Debian/Dockerfile_Buster, Ubuntu/Dockerfile_20_04 ]
     steps:
       - uses: actions/checkout@v2
         with:
           persist-credentials: false
-      - name: Build docker images
-        run: >
-          docker build
-          -t local
-          -f Docker/${{ matrix.distro }}
-          --build-arg BUILD_THREADS=2
-          --build-arg GITHUB_CI_TOKEN=${{ secrets.GITHUB_TOKEN }}
-          --build-arg GIT_COMMIT=${{ needs.prepareRelease.outputs.github_sha_short }}
-          --build-arg ALIAS_RELEASE=Build${{ github.run_number }}-${{ needs.prepareRelease.outputs.github_sha_short }}
-          --build-arg REPLACE_EXISTING_ARCHIVE=--replace
-          .
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v2
+        with:
+          version: '5.12.10'
+          setup-python: 'false'
+          modules: 'qtwebengine'
+
+      - name: Install dependencies
+        run: |
+          curl -L https://bintray.com/homebrew/bottles/download_file?file_path=boost-1.74.0.high_sierra.bottle.tar.gz -o boost-1.74.0.high_sierra.bottle.tar.gz
+          brew install -f boost-1.74.0.high_sierra.bottle.tar.gz
+          brew install berkeley-db@4
+
+      - name: Build MacOS binaries
+        run: ./scripts/cmake-build-mac.sh -g
         env:
-          GITHUB_CI_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAC_QT_DIR: ${{ env.Qt5_DIR }}
+          BOOST_VERSION_MAC: 1.74.0
+
+      - name: Create MacOS dmg sha256 checksum file
+        run: |
+          shasum -a 256 ${{ github.workspace }}/cmake-build-cmdline-mac/aliaswallet/Alias.dmg | awk '{ print $1 }' > ${{ github.workspace }}/cmake-build-cmdline-mac/aliaswallet/Alias.sha256
+          cat ${{ github.workspace }}/cmake-build-cmdline-mac/aliaswallet/Alias.sha256
+
+      - name: Upload MacOS Build
+        id: upload-release-asset
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ github.workspace }}/cmake-build-cmdline-mac/aliaswallet/Alias.dmg
+          asset_name: Alias-${{ needs.prepareRelease.outputs.alias_release }}-${{ needs.prepareRelease.outputs.github_sha_short }}-Mac.dmg
+          tag: ${{ needs.prepareRelease.outputs.alias_release }}
+          overwrite: true
+
+      - name: Upload MacOS checksum file
+        id: upload-release-checksum
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ github.workspace }}/cmake-build-cmdline-mac/aliaswallet/Alias.sha256
+          asset_name: Alias-${{ needs.prepareRelease.outputs.alias_release }}-${{ needs.prepareRelease.outputs.github_sha_short }}-Mac.sha256
+          tag: ${{ needs.prepareRelease.outputs.alias_release }}
+          overwrite: true
