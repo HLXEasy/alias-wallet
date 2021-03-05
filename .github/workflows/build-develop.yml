@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - ghActionsLinuxReleasebuild
+
 jobs:
   # ==========================================================================
   # Create Github tag/release and export short SHA of current HEAD
