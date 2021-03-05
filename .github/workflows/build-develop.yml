@@ -95,6 +95,7 @@ jobs:
           setup-python: 'false'
           modules: 'qtwebengine'
 
+
       - name: Install dependencies
         run: |
           curl -L https://bintray.com/homebrew/bottles/download_file?file_path=boost-1.74.0.high_sierra.bottle.tar.gz -o boost-1.74.0.high_sierra.bottle.tar.gz
